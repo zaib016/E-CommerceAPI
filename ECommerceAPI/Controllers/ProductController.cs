@@ -1,22 +1,26 @@
-﻿using ECommerceAPI.Models;
+﻿using System.Text.Json;
+using ECommerceAPI.Models;
 using ECommerceAPI.Models.Entities;
 using ECommerceAPI.Repository.Interface;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Distributed;
 
 namespace ECommerceAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    //[Authorize]
     public class ProductController : ControllerBase
     {
         private IGenericRepository<Product> _productRepo;
+        private IDistributedCache _distributedCache;
         private readonly List<Product> productTable = new List<Product>();
 
-        public ProductController(IGenericRepository<Product> genericRepository)
+        public ProductController(IGenericRepository<Product> genericRepository, IDistributedCache distributedCache)
         {
             _productRepo = genericRepository;
+            _distributedCache = distributedCache;
             for(int i = 1; i <= 100; i++)
             {
                 productTable.Add(new Product { CategoryId = i, ProductName = "", ImageUrl = "", Price = "", Stock = "" });
@@ -24,8 +28,28 @@ namespace ECommerceAPI.Controllers
         }
         [HttpGet]
         public async Task<IActionResult> getAll()
+
         {
-            return Ok(await _productRepo.getAllAsync());
+            //*****************Distributed Cache******************
+            var key = "product_all";
+
+            var cacheData = await _distributedCache.GetStringAsync(key);
+
+            if(cacheData != null)
+            {
+                var result = JsonSerializer.Deserialize<List<Product>>(cacheData);
+                return Ok(result);
+            }
+
+            var dataDB = await _productRepo.getAllAsync();
+            var jsonData = JsonSerializer.Serialize(dataDB);
+
+            await _distributedCache.SetStringAsync(key, jsonData, new DistributedCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+            });
+
+            return Ok(dataDB);
         }
         [HttpGet("{id}")]
         public async Task<IActionResult> getById(int id)
@@ -77,7 +101,17 @@ namespace ECommerceAPI.Controllers
         {
             var totalCount = productTable.Count;
             var totalPages = (int)Math.Ceiling((decimal)totalCount / pageSize);
-            var productPerPage = productTable.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+            var productPerPage = productTable
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                // payload trimming
+                .Select(p => new ProductDTOs1
+                {
+                    CategoryId = p.CategoryId,
+                    ProductName = p.ProductName,
+                    Price = p.Price
+                })
+                .ToList();
 
             return Ok(productPerPage);
         }

@@ -1,27 +1,60 @@
-﻿using ECommerceAPI.Models;
+﻿using System.Text.Json.Serialization;
+using ECommerceAPI.Models;
 using ECommerceAPI.Models.Entities;
 using ECommerceAPI.Repository.Interface;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
+using Newtonsoft.Json;
 
 namespace ECommerceAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize]
+    //[Authorize]
     public class CategoryController : ControllerBase
     {
         private IGenericRepository<Category> _categoryRepo;
+        private IMemoryCache _inMemoryCache;
+        private IDistributedCache _distributedCache;
 
-        public CategoryController(IGenericRepository<Category> categoryRepository)
+        public CategoryController(IGenericRepository<Category> categoryRepository, IMemoryCache memoryCache, IDistributedCache distributedCache)
         {
-            _categoryRepo = categoryRepository; 
+            _categoryRepo = categoryRepository;
+            _inMemoryCache = memoryCache;
+            _distributedCache = distributedCache;
         }
-        [HttpGet]
+        [HttpGet("getAll")]
         public async Task<IActionResult> getAll()
         {
-            return Ok(await _categoryRepo.getAllAsync());
+            var key = "categories_List";
+            //In_Memory Cache
+            if(!_inMemoryCache.TryGetValue(key, out List<Category> categories))
+            {
+                //Redis Cache
+                var redisCache = await _distributedCache.GetStringAsync(key);
+                if(redisCache != null)
+                {
+                    categories = JsonConvert.DeserializeObject<List<Category>>(redisCache);
+                }
+                else
+                {
+                    //DB
+                    categories = await _categoryRepo.getAllAsync();
+                    //Set Redis Cache
+                    await _distributedCache.SetStringAsync(key, JsonConvert.SerializeObject(categories), new DistributedCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10)
+                    });
+                }
+                //Set In_Memory Cache
+                _inMemoryCache.Set(key, categories, TimeSpan.FromMinutes(5));
+            }
+            //Http Cache
+            Response.Headers["Cache-Control"] = "public,max-age=60";
+            return Ok(categories);
         }
         [HttpGet("{id}")]
         public async Task<IActionResult> getById(int id)

@@ -8,4 +8,10 @@
         public required string Stock { get; set; }
         public required string Price { get; set; }
     }
+    public class ProductDTOs1
+    {
+        public int CategoryId { get; set; }
+        public required string ProductName { get; set; }
+        public required string Price { get; set; }
+    }
 }
